@@ -206,7 +206,8 @@ def get_json(
     quiet: bool = False,
 ) -> object:
     parsed = urlsplit(url)
-    endpoint = f"{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path or url
+    endpoint_path = parsed.path if parsed.path else ""
+    endpoint = f"API_BASE{endpoint_path}" if endpoint_path else "API_BASE"
     last_status: int | None = None
     last_err_kind = "UnknownError"
     for attempt, backoff in enumerate((0.0,) + RETRY_BACKOFFS):
@@ -610,8 +611,7 @@ def main() -> int:
             "Download existing parquets from Cloudflare R2 before scraping, then "
             "upload all parquet+csv pairs after. Requires env vars: "
             + ", ".join(R2_ENV_VARS)
-            + ", and R2_PREFIX (folder inside the bucket, e.g. BDO-Central-Market; "
-            "set R2_PREFIX empty for bucket root)."
+            + ", and R2_PREFIX ("set R2_PREFIX empty for bucket root)."
         ),
     )
     args = parser.parse_args()
