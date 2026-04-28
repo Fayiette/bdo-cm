@@ -610,7 +610,8 @@ def main() -> int:
             "Download existing parquets from Cloudflare R2 before scraping, then "
             "upload all parquet+csv pairs after. Requires env vars: "
             + ", ".join(R2_ENV_VARS)
-            + ", and R2_PREFIX ("set R2_PREFIX empty for bucket root)."
+            + ", and R2_PREFIX (folder inside the bucket; "
+            "set R2_PREFIX empty for bucket root)."
         ),
     )
     args = parser.parse_args()
