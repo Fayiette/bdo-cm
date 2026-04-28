@@ -7,28 +7,28 @@
 #   R2_ENDPOINT            - same
 #   R2_PREFIX              - folder inside the bucket
 #
-# Manual run: Actions tab -> "BDO Pearl Items" -> Run workflow.
+# Manual run: Actions tab -> "BDO Enhancement Items" -> Run workflow.
 
-name: Scrape BDO Pearl Items
+name: Scrape BDO Enhancement Items
 
 on:
   schedule:
-    # 00:22, 06:22, 12:22, 18:22
-    - cron: "22 0,6,12,18 * * *"
-    # 01:07, 07:07, 13:07, 19:07
-    - cron: "07 1,7,13,19 * * *"
-    # 01:52, 07:52, 13:52, 19:52
-    - cron: "52 1,7,13,19 * * *"
-    # 02:37, 08:37, 14:37, 20:37
-    - cron: "37 2,8,14,20 * * *"
-    # 03:22, 09:22, 15:22, 21:22
-    - cron: "22 3,9,15,21 * * *"
-    # 04:07, 10:07, 16:07, 22:07
-    - cron: "07 4,10,16,22 * * *"
-    # 04:52, 10:52, 16:52, 22:52
-    - cron: "52 4,10,16,22 * * *"
-    # 05:37, 11:37, 17:37, 23:37
-    - cron: "37 5,11,17,23 * * *"
+    # 00:14, 06:14, 12:14, 18:14
+    - cron: "14 0,6,12,18 * * *"
+    # 00:59, 06:59, 12:59, 18:59
+    - cron: "59 0,6,12,18 * * *"
+    # 01:44, 07:44, 13:44, 19:44
+    - cron: "44 1,7,13,19 * * *"
+    # 02:29, 08:29, 14:29, 20:29
+    - cron: "29 2,8,14,20 * * *"
+    # 03:14, 09:14, 15:14, 21:14
+    - cron: "14 3,9,15,21 * * *"
+    # 03:59, 09:59, 15:59, 21:59
+    - cron: "59 3,9,15,21 * * *"
+    # 04:44, 10:44, 16:44, 22:44
+    - cron: "44 4,10,16,22 * * *"
+    # 05:29, 11:29, 17:29, 23:29
+    - cron: "29 5,11,17,23 * * *"
   workflow_dispatch:
 
 permissions:
@@ -68,4 +68,4 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_PREFIX: ${{ secrets.R2_PREFIX }}
           API_BASE: ${{ secrets.API_BASE }}
-        run: python pearl_items.py --r2-sync
+        run: python enhancement_items.py --r2-sync
