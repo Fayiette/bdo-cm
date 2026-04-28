@@ -73,6 +73,8 @@ FACT_COLUMNS = [
 # ---------------------------------------------------------------------------
 
 R2_ENV_VARS = ("R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT")
+# Folder inside the bucket for Enhancement parquet/csv (separate from Pearl's R2_PREFIX).
+R2_OBJECT_PREFIX_ENV = "R2_ENHANCEMENT_PREFIX"
 
 
 def r2_object_key(prefix: str, filename: str) -> str:
@@ -84,18 +86,18 @@ def r2_object_key(prefix: str, filename: str) -> str:
 def require_r2_env() -> dict[str, str]:
     """Return R2 config (credentials + normalized object prefix), or raise SystemExit."""
     missing = [name for name in R2_ENV_VARS if not os.environ.get(name)]
-    if "R2_PREFIX" not in os.environ:
-        missing.append("R2_PREFIX")
+    if R2_OBJECT_PREFIX_ENV not in os.environ:
+        missing.append(R2_OBJECT_PREFIX_ENV)
     if missing:
         raise SystemExit(
             "--r2-sync requires the following environment variables to be set: "
             + ", ".join(missing)
-            + ". Use R2_PREFIX=YourFolder for a prefix; "
-            "set R2_PREFIX to empty for bucket root."
+            + f". Use {R2_OBJECT_PREFIX_ENV}=YourFolder for a prefix; "
+            f"set {R2_OBJECT_PREFIX_ENV} to empty for bucket root."
         )
-    prefix = os.environ["R2_PREFIX"].strip().strip("/")
+    prefix = os.environ[R2_OBJECT_PREFIX_ENV].strip().strip("/")
     out = {name: os.environ[name] for name in R2_ENV_VARS}
-    out["R2_PREFIX"] = prefix
+    out[R2_OBJECT_PREFIX_ENV] = prefix
     return out
 
 
@@ -603,8 +605,8 @@ def main() -> int:
             "Download existing parquets from Cloudflare R2 before scraping, then "
             "upload all parquet+csv pairs after. Requires env vars: "
             + ", ".join(R2_ENV_VARS)
-            + ", and R2_PREFIX (folder inside the bucket; "
-            "set R2_PREFIX empty for bucket root)."
+            + f", and {R2_OBJECT_PREFIX_ENV} (folder inside the bucket; "
+            f"set {R2_OBJECT_PREFIX_ENV} empty for bucket root)."
         ),
     )
     args = parser.parse_args()
@@ -633,8 +635,10 @@ def main() -> int:
     if args.r2_sync:
         r2_env = require_r2_env()
         r2_client = make_r2_client(r2_env)
-        print(f"  r2 prefix: {r2_env['R2_PREFIX'] or '(bucket root)'}")
-        r2_pre_run_download(r2_client, r2_env["R2_BUCKET"], r2_env["R2_PREFIX"], data_dir)
+        print(f"  r2 prefix ({R2_OBJECT_PREFIX_ENV}): {r2_env[R2_OBJECT_PREFIX_ENV] or '(bucket root)'}")
+        r2_pre_run_download(
+            r2_client, r2_env["R2_BUCKET"], r2_env[R2_OBJECT_PREFIX_ENV], data_dir
+        )
     print()
 
     session = make_session()
@@ -718,7 +722,7 @@ def main() -> int:
 
     if r2_client is not None:
         r2_post_run_upload(
-            r2_client, r2_env["R2_BUCKET"], r2_env["R2_PREFIX"], data_dir
+            r2_client, r2_env["R2_BUCKET"], r2_env[R2_OBJECT_PREFIX_ENV], data_dir
         )
 
     print("Done.")
