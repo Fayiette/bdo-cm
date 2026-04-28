@@ -1,0 +1,70 @@
+# BDO Pearl Items scraper - scheduled run.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   R2_BUCKET              - e.g. abc
+#   R2_ACCESS_KEY_ID       - from Cloudflare R2 -> Manage R2 API tokens
+#   R2_SECRET_ACCESS_KEY   - same
+#   R2_ENDPOINT            - same
+#   R2_PREFIX              - folder inside the bucket
+#
+# Manual run: Actions tab -> "BDO Pearl Items" -> Run workflow.
+
+name: Scrape BDO Pearl Items
+
+on:
+  schedule:
+    # 00:22, 06:22, 12:22, 18:22
+    - cron: "22 0,6,12,18 * * *"
+    # 01:07, 07:07, 13:07, 19:07
+    - cron: "07 1,7,13,19 * * *"
+    # 01:52, 07:52, 13:52, 19:52
+    - cron: "52 1,7,13,19 * * *"
+    # 02:37, 08:37, 14:37, 20:37
+    - cron: "37 2,8,14,20 * * *"
+    # 03:22, 09:22, 15:22, 21:22
+    - cron: "22 3,9,15,21 * * *"
+    # 04:07, 10:07, 16:07, 22:07
+    - cron: "07 4,10,16,22 * * *"
+    # 04:52, 10:52, 16:52, 22:52
+    - cron: "52 4,10,16,22 * * *"
+    # 05:37, 11:37, 17:37, 23:37
+    - cron: "37 5,11,17,23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pearl-items
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    environment: prod 
+    timeout-minutes: 13
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run scraper with R2 sync
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_PREFIX: ${{ secrets.R2_PREFIX }}
+        run: python scrape_pearl_items.py --r2-sync
