@@ -100,7 +100,6 @@ def r2_object_key(prefix: str, filename: str) -> str:
         return filename
     return f"{prefix}/{filename}"
 
-
 def require_r2_env() -> dict[str, str]:
     """Return R2 config (credentials + normalized object prefix), or raise SystemExit."""
     missing = [name for name in R2_ENV_VARS if not os.environ.get(name)]
@@ -110,7 +109,7 @@ def require_r2_env() -> dict[str, str]:
         raise SystemExit(
             "--r2-sync requires the following environment variables to be set: "
             + ", ".join(missing)
-            + ". Use R2_PREFIX=YourFolder (or your folder) for a prefix; "
+            + ". Use R2_PREFIX=YourFolder for a prefix; "
             "set R2_PREFIX to empty for bucket root."
         )
     prefix = os.environ["R2_PREFIX"].strip().strip("/")
