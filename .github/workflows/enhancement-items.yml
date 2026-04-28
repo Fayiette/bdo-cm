@@ -1,4 +1,4 @@
-# BDO Pearl Items scraper - scheduled run.
+# BDO enhancement Items scraper - scheduled run.
 #
 # Required repo secrets (Settings -> Secrets and variables -> Actions):
 #   R2_BUCKET              - e.g. abc
@@ -35,7 +35,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pearl-items
+  group: enhancement-items
   cancel-in-progress: false
 
 jobs:
