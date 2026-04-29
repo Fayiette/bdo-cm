@@ -34,9 +34,9 @@ import requests
 
 CHUNK_SIZE = 100
 USER_AGENT = "bdo-all-market-items/1.0 (+https://github.com)"
-RETRY_BACKOFFS = (1.0, 3.0, 7.0)
+RETRY_BACKOFFS = (1.0, 10.0, 30.0)
 INTER_CHUNK_SLEEP_S = 0.5
-INTER_REGION_SLEEP_S = 2.0
+INTER_REGION_SLEEP_S = 5.0
 
 # Same known-bad id as pearl_items.py for SubList batch failures.
 BATCH_FAIL_SKIP_IDS: frozenset[int] = frozenset({601046})
