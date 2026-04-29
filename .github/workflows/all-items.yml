@@ -9,8 +9,6 @@
 #
 # Manual run: Actions tab -> "Scrape BDO All Market Items" -> Run workflow.
 #
-# After migrating from enhancement_items: remove old R2 objects DIM_Enhancement_ID.*
-# and FACT_Enhancement.* if present; add R2_MARKET_PREFIX secret.
 
 name: Scrape BDO All Market Items
 
