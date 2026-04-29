@@ -42,7 +42,7 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     environment: prod 
-    timeout-minutes: 13
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
