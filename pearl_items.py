@@ -38,7 +38,8 @@ MAIN_CATEGORY = 55
 CHUNK_SIZE = 100
 USER_AGENT = "bdo-pearl-items/1.0 (+https://github.com)"
 RETRY_BACKOFFS = (1.0, 3.0, 7.0)
-INTER_CHUNK_SLEEP_S = 0.2
+INTER_CHUNK_SLEEP_S = 0.5
+INTER_REGION_SLEEP_S = 2.0
 
 # IDs that have been observed to break SubList batches even when other IDs in
 # the same batch are healthy. The first time any of these appears in a failing
@@ -583,11 +584,31 @@ def parse_subs(raw: str) -> set[int]:
     return out
 
 
+def parse_regions(raw: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        region = part.strip().lower()
+        if not region:
+            continue
+        if region in seen:
+            continue
+        seen.add(region)
+        out.append(region)
+    if not out:
+        raise SystemExit("--regions: must include at least one region code")
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Pull BDO Pearl Item market data via API_BASE into star-schema parquet+csv files."
     )
-    parser.add_argument("--region", default="na", help="Market region (default: na)")
+    parser.add_argument(
+        "--regions",
+        default="na,eu,sa,kr",
+        help="Comma-separated regions to scrape (default: na,eu,sa,kr)",
+    )
     parser.add_argument("--data-dir", default="data", help="Output directory (default: data)")
     parser.add_argument("--lang", default="en", help="Language for item names (default: en)")
     parser.add_argument(
@@ -621,6 +642,7 @@ def main() -> int:
     args = parser.parse_args()
 
     include_subs = parse_subs(args.include_subs)
+    regions = parse_regions(args.regions)
     api_base = require_api_base()
     data_dir = Path(args.data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -631,7 +653,7 @@ def main() -> int:
     today_date = pulled_at_utc[:10]
 
     print(f"== BDO Pearl Items Scraper ==")
-    print(f"  region   : {args.region}")
+    print(f"  regions  : {regions}")
     print(f"  lang     : {args.lang}")
     print(f"  api base : {api_base}")
     print(f"  data dir : {data_dir.resolve()}")
@@ -650,34 +672,58 @@ def main() -> int:
 
     session = make_session()
 
-    print("Fetching /pearlItems ...")
-    raw_pearl = fetch_pearl_items(session, api_base, args.region, args.lang)
-    pearl = [
-        i
-        for i in raw_pearl
-        if int(i.get("mainCategory", -1)) == MAIN_CATEGORY
-        and int(i.get("subCategory", -1)) in include_subs
-    ]
-    print(f"  got {len(raw_pearl)} items, {len(pearl)} after main/sub filter")
+    total_raw = 0
+    total_filtered = 0
+    dim_frames: list[pd.DataFrame] = []
+    fact_frames: list[pd.DataFrame] = []
+    print("Fetching /pearlItems per region ...")
+    for idx, region in enumerate(regions, 1):
+        print(f"  [{region}] fetching /pearlItems ...")
+        raw_pearl = fetch_pearl_items(session, api_base, region, args.lang)
+        pearl = [
+            i
+            for i in raw_pearl
+            if int(i.get("mainCategory", -1)) == MAIN_CATEGORY
+            and int(i.get("subCategory", -1)) in include_subs
+        ]
+        print(
+            f"  [{region}] got {len(raw_pearl)} items, {len(pearl)} after main/sub filter"
+        )
+        total_raw += len(raw_pearl)
+        total_filtered += len(pearl)
+        if not pearl:
+            continue
+        dim_frames.append(build_dim_rows(pearl, region))
+        fact_frames.append(build_today_facts(pearl, region, pulled_at_utc, pulled_at_unix))
+        if idx < len(regions):
+            time.sleep(INTER_REGION_SLEEP_S)
 
-    if not pearl:
-        print("ERROR: 0 items after filtering; aborting before writing anything.", file=sys.stderr)
+    if total_filtered == 0 or not dim_frames or not fact_frames:
+        print(
+            "ERROR: 0 pearl items after filtering across configured regions; aborting before writing anything.",
+            file=sys.stderr,
+        )
         return 1
 
     print("Skipping SubList enrichment (priceMin/priceMax/lastSoldTime remain null).")
 
     print()
     print("Writing DIM ...")
-    dim_df = build_dim_rows(pearl, args.region)
+    dim_df = pd.concat(dim_frames, ignore_index=True)
+    dim_df = dim_df.sort_values(["region", "id"]).reset_index(drop=True)
     _, dim_total, dim_added = upsert_dim(dim_df, data_dir, refresh=args.refresh_dim)
     refresh_note = " (refreshed)" if args.refresh_dim else ""
     print(f"  {DIM_BASENAME}: {dim_total} total (+{dim_added} new this run){refresh_note}")
 
     print()
     print("Writing FACTs ...")
+<<<<<<< Updated upstream
     today_facts = build_today_facts(
         pearl, args.region, pulled_at_utc, pulled_at_unix
     )
+=======
+    today_facts = pd.concat(fact_frames, ignore_index=True)
+>>>>>>> Stashed changes
     today_facts["category"] = today_facts["_subCategory"].map(SUB_TO_CATEGORY)
 
     summary: list[tuple[str, int, int]] = []

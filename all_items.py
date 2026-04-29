@@ -35,7 +35,8 @@ import requests
 CHUNK_SIZE = 100
 USER_AGENT = "bdo-all-market-items/1.0 (+https://github.com)"
 RETRY_BACKOFFS = (1.0, 3.0, 7.0)
-INTER_CHUNK_SLEEP_S = 0.2
+INTER_CHUNK_SLEEP_S = 0.5
+INTER_REGION_SLEEP_S = 2.0
 
 # Same known-bad id as pearl_items.py for SubList batch failures.
 BATCH_FAIL_SKIP_IDS: frozenset[int] = frozenset({601046})
@@ -497,11 +498,31 @@ def write_fact(
     return len(today_rows), replaced
 
 
+def parse_regions(raw: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        region = part.strip().lower()
+        if not region:
+            continue
+        if region in seen:
+            continue
+        seen.add(region)
+        out.append(region)
+    if not out:
+        raise SystemExit("--regions: must include at least one region code")
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Pull full BDO market catalog (non-pearl) via API_BASE into star-schema parquet+csv."
     )
-    parser.add_argument("--region", default="na", help="Market region (default: na)")
+    parser.add_argument(
+        "--regions",
+        default="na,eu,sa,kr",
+        help="Comma-separated regions to scrape (default: na,eu,sa,kr)",
+    )
     parser.add_argument("--data-dir", default="data", help="Output directory (default: data)")
     parser.add_argument("--lang", default="en", help="Language for item names (default: en)")
     parser.add_argument(
@@ -522,6 +543,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    regions = parse_regions(args.regions)
     api_base = require_api_base()
     data_dir = Path(args.data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -532,7 +554,7 @@ def main() -> int:
     today_date = pulled_at_utc[:10]
 
     print("== BDO All Market Items Scraper ==")
-    print(f"  region   : {args.region}")
+    print(f"  regions  : {regions}")
     print(f"  lang     : {args.lang}")
     print(f"  data dir : {data_dir.resolve()}")
     print(f"  pulled_at: {pulled_at_utc} ({pulled_at_unix})")
@@ -551,28 +573,48 @@ def main() -> int:
 
     session = make_session()
 
-    print("Fetching /market (full catalog) ...")
-    catalog = fetch_market_catalog(session, api_base, args.region, args.lang)
-    print(f"  got {len(catalog)} rows")
+    total_catalog_rows = 0
+    dim_frames: list[pd.DataFrame] = []
+    fact_frames: list[pd.DataFrame] = []
+    print("Fetching /market (full catalog) per region ...")
+    for idx, region in enumerate(regions, 1):
+        print(f"  [{region}] fetching /market ...")
+        catalog = fetch_market_catalog(session, api_base, region, args.lang)
+        print(f"  [{region}] got {len(catalog)} rows")
+        if not catalog:
+            continue
+        total_catalog_rows += len(catalog)
+        dim_frames.append(build_dim_rows(catalog, region))
+        fact_frames.append(build_today_facts(catalog, region, pulled_at_utc, pulled_at_unix))
+        if idx < len(regions):
+            time.sleep(INTER_REGION_SLEEP_S)
 
-    if not catalog:
-        print("ERROR: 0 items from API; aborting before writing anything.", file=sys.stderr)
+    if total_catalog_rows == 0 or not dim_frames or not fact_frames:
+        print(
+            "ERROR: 0 catalog rows across configured regions; aborting before writing anything.",
+            file=sys.stderr,
+        )
         return 1
 
     print("Skipping SubList enrichment (priceMin/priceMax/lastSoldTime remain null).")
 
     print()
     print("Writing DIM ...")
-    dim_df = build_dim_rows(catalog, args.region)
+    dim_df = pd.concat(dim_frames, ignore_index=True)
+    dim_df = dim_df.sort_values(["region", "id"]).reset_index(drop=True)
     _, dim_total, dim_added = upsert_dim(dim_df, data_dir, refresh=args.refresh_dim)
     refresh_note = " (refreshed)" if args.refresh_dim else ""
     print(f"  {DIM_BASENAME}: {dim_total} total (+{dim_added} new this run){refresh_note}")
 
     print()
     print("Writing FACT ...")
+<<<<<<< Updated upstream
     today_facts = build_today_facts(
         catalog, args.region, pulled_at_utc, pulled_at_unix
     )
+=======
+    today_facts = pd.concat(fact_frames, ignore_index=True)
+>>>>>>> Stashed changes
     rows_today, replaced = write_fact(today_facts, data_dir, today_date)
     print(
         f"  {FACT_BASENAME}: {rows_today:>5} rows for today "
