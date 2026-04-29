@@ -1,5 +1,5 @@
 """
-BDO All Market Items Scraper (non-Pearl catalog).
+BDO All Market Items Scraper.
 
 Pulls the full central-market catalog from /v2/{region}/market?lang=... (one call,
 ~11k rows), then writes:
@@ -7,19 +7,14 @@ Pulls the full central-market catalog from /v2/{region}/market?lang=... (one cal
   data/DIM_Market_ID.{parquet,csv}   - id, name, mainCategory, subCategory, region
   data/FACT_Market.{parquet,csv}     - snapshot + priceMin/priceMax/lastSoldTime
 
-Pearl Shop items are tracked separately (pearl_items.py / pearlItems endpoint).
 
 FACT is unique on (region, id, UTC date). Re-runs the same UTC day replace that
 day's existing rows. `how_many_today` is recomputed every run.
 
-GetWorldMarketSubList can return list[list[dict]] when items have enhancement
-levels (sid); this script flattens that and keeps the lowest sid row per id
-(baseline pricing aligned with /market basePrice).
+This scraper intentionally does not call GetWorldMarketSubList; FACT writes
+priceMin/priceMax/lastSoldTime as null to keep runs fast and stable.
 
-R2: use R2_MARKET_PREFIX for the folder inside the bucket (separate from Pearl's
-R2_PREFIX). After migrating from enhancement_items.py, manually delete old R2
-objects DIM_Enhancement_ID.* and FACT_Enhancement.* if present, and add the
-R2_MARKET_PREFIX repository secret.
+
 """
 
 from __future__ import annotations
@@ -396,7 +391,6 @@ def merge_enrichment_rows(
 
 def build_today_facts(
     items: list[dict],
-    enrichment_by_id: dict[int, dict],
     region: str,
     pulled_at_utc: str,
     pulled_at_unix: int,
@@ -407,7 +401,6 @@ def build_today_facts(
             item_id = int(item["id"])
         except (KeyError, TypeError, ValueError):
             continue
-        enrich = enrichment_by_id.get(item_id, {})
         rows.append(
             {
                 "pulled_at_utc": pulled_at_utc,
@@ -417,9 +410,10 @@ def build_today_facts(
                 "currentStock": int(item.get("currentStock", 0) or 0),
                 "basePrice": int(item.get("basePrice", 0) or 0),
                 "totalTrades": int(item.get("totalTrades", 0) or 0),
-                "priceMin": _opt_int(enrich.get("priceMin")),
-                "priceMax": _opt_int(enrich.get("priceMax")),
-                "lastSoldTime": _opt_int(enrich.get("lastSoldTime")),
+                # Intentionally not enriched for all-items scraper speed.
+                "priceMin": None,
+                "priceMax": None,
+                "lastSoldTime": None,
                 "how_many_today": 0,
             }
         )
@@ -511,11 +505,6 @@ def main() -> int:
     parser.add_argument("--data-dir", default="data", help="Output directory (default: data)")
     parser.add_argument("--lang", default="en", help="Language for item names (default: en)")
     parser.add_argument(
-        "--no-enrich",
-        action="store_true",
-        help="Skip GetWorldMarketSubList enrichment (priceMin/priceMax/lastSoldTime stay null).",
-    )
-    parser.add_argument(
         "--refresh-dim",
         action="store_true",
         help="Rewrite DIM_Market_ID from scratch instead of upserting.",
@@ -570,43 +559,7 @@ def main() -> int:
         print("ERROR: 0 items from API; aborting before writing anything.", file=sys.stderr)
         return 1
 
-    enrichment_by_id: dict[int, dict] = {}
-    failed_ids: list[int] = []
-    skip_ids: set[int] = set()
-    ids = []
-    for i in catalog:
-        try:
-            ids.append(int(i["id"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-
-    if not args.no_enrich:
-        chunks = list(chunked(ids, CHUNK_SIZE))
-        print(f"Fetching SubList enrichment in {len(chunks)} chunks of {CHUNK_SIZE} ...")
-        for idx, chunk in enumerate(chunks, 1):
-            rows = fetch_sublist_resilient(
-                session, api_base, args.region, args.lang, chunk, failed_ids, skip_ids
-            )
-            merge_enrichment_rows(enrichment_by_id, rows)
-            if idx % 10 == 0 or idx == len(chunks):
-                print(f"  ...chunk {idx}/{len(chunks)} done", flush=True)
-            if idx < len(chunks):
-                time.sleep(INTER_CHUNK_SLEEP_S)
-        enriched_count = sum(1 for i in ids if i in enrichment_by_id)
-        print(f"  enriched {enriched_count}/{len(ids)} items")
-        if skip_ids:
-            print(
-                f"  note: {len(skip_ids)} ids skipped after batch failure "
-                f"({sorted(skip_ids)})"
-            )
-        if failed_ids:
-            print(
-                f"  note: {len(failed_ids)} ids could not be enriched "
-                f"(left as null priceMin/priceMax/lastSoldTime)"
-            )
-    else:
-        print("Skipping enrichment (--no-enrich).")
-        enriched_count = 0
+    print("Skipping SubList enrichment (priceMin/priceMax/lastSoldTime remain null).")
 
     print()
     print("Writing DIM ...")
@@ -618,18 +571,12 @@ def main() -> int:
     print()
     print("Writing FACT ...")
     today_facts = build_today_facts(
-        catalog, enrichment_by_id, args.region, pulled_at_utc, pulled_at_unix
+        catalog, args.region, pulled_at_utc, pulled_at_unix
     )
     rows_today, replaced = write_fact(today_facts, data_dir, today_date)
     print(
         f"  {FACT_BASENAME}: {rows_today:>5} rows for today "
         f"(replaced {replaced} same-day rows)"
-    )
-
-    print()
-    print(
-        f"Enriched (priceMin/priceMax/lastSoldTime): "
-        f"{enriched_count} / {len(ids)} items"
     )
 
     if r2_client is not None:
