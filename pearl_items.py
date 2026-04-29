@@ -717,13 +717,7 @@ def main() -> int:
 
     print()
     print("Writing FACTs ...")
-<<<<<<< Updated upstream
-    today_facts = build_today_facts(
-        pearl, args.region, pulled_at_utc, pulled_at_unix
-    )
-=======
     today_facts = pd.concat(fact_frames, ignore_index=True)
->>>>>>> Stashed changes
     today_facts["category"] = today_facts["_subCategory"].map(SUB_TO_CATEGORY)
 
     summary: list[tuple[str, int, int]] = []

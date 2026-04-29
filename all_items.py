@@ -608,13 +608,7 @@ def main() -> int:
 
     print()
     print("Writing FACT ...")
-<<<<<<< Updated upstream
-    today_facts = build_today_facts(
-        catalog, args.region, pulled_at_utc, pulled_at_unix
-    )
-=======
     today_facts = pd.concat(fact_frames, ignore_index=True)
->>>>>>> Stashed changes
     rows_today, replaced = write_fact(today_facts, data_dir, today_date)
     print(
         f"  {FACT_BASENAME}: {rows_today:>5} rows for today "
