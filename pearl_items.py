@@ -37,9 +37,9 @@ import requests
 MAIN_CATEGORY = 55
 CHUNK_SIZE = 100
 USER_AGENT = "bdo-pearl-items/1.0 (+https://github.com)"
-RETRY_BACKOFFS = (1.0, 3.0, 7.0)
+RETRY_BACKOFFS = (1.0, 10.0, 30.0)
 INTER_CHUNK_SLEEP_S = 0.5
-INTER_REGION_SLEEP_S = 2.0
+INTER_REGION_SLEEP_S = 5.0
 
 # IDs that have been observed to break SubList batches even when other IDs in
 # the same batch are healthy. The first time any of these appears in a failing
