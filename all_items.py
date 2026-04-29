@@ -34,9 +34,10 @@ import requests
 
 CHUNK_SIZE = 100
 USER_AGENT = "bdo-all-market-items/1.0 (+https://github.com)"
-RETRY_BACKOFFS = (1.0, 3.0, 7.0)
-INTER_CHUNK_SLEEP_S = 0.5
-INTER_REGION_SLEEP_S = 2.0
+RETRY_BACKOFFS = (3.0, 5.0, 13.0)
+INTER_CHUNK_SLEEP_S = 1.5
+INTER_REGION_SLEEP_S = 3.5
+CANONICAL_REGION_ORDER = ("na", "eu", "sa", "kr")
 
 # Same known-bad id as pearl_items.py for SubList batch failures.
 BATCH_FAIL_SKIP_IDS: frozenset[int] = frozenset({601046})
@@ -511,7 +512,9 @@ def parse_regions(raw: str) -> list[str]:
         out.append(region)
     if not out:
         raise SystemExit("--regions: must include at least one region code")
-    return out
+    canonical = [r for r in CANONICAL_REGION_ORDER if r in out]
+    extras = [r for r in out if r not in CANONICAL_REGION_ORDER]
+    return canonical + extras
 
 
 def main() -> int:
@@ -574,45 +577,57 @@ def main() -> int:
     session = make_session()
 
     total_catalog_rows = 0
-    dim_frames: list[pd.DataFrame] = []
-    fact_frames: list[pd.DataFrame] = []
+    success_regions: list[str] = []
+    failed_regions: list[str] = []
+    did_refresh_dim = False
     print("Fetching /market (full catalog) per region ...")
     for idx, region in enumerate(regions, 1):
-        print(f"  [{region}] fetching /market ...")
-        catalog = fetch_market_catalog(session, api_base, region, args.lang)
-        print(f"  [{region}] got {len(catalog)} rows")
-        if not catalog:
-            continue
-        total_catalog_rows += len(catalog)
-        dim_frames.append(build_dim_rows(catalog, region))
-        fact_frames.append(build_today_facts(catalog, region, pulled_at_utc, pulled_at_unix))
+        try:
+            print(f"  [{region}] fetching /market ...")
+            catalog = fetch_market_catalog(session, api_base, region, args.lang)
+            print(f"  [{region}] got {len(catalog)} rows")
+            if not catalog:
+                print(f"  [{region}] no rows; skipping writes")
+                failed_regions.append(region)
+                continue
+
+            total_catalog_rows += len(catalog)
+
+            region_dim = build_dim_rows(catalog, region)
+            refresh_now = args.refresh_dim and not did_refresh_dim
+            _, dim_total, dim_added = upsert_dim(region_dim, data_dir, refresh=refresh_now)
+            if refresh_now:
+                did_refresh_dim = True
+            refresh_note = " (refreshed)" if refresh_now else ""
+            print(
+                f"  [{region}] {DIM_BASENAME}: {dim_total} total (+{dim_added} new this run){refresh_note}"
+            )
+
+            today_facts = build_today_facts(catalog, region, pulled_at_utc, pulled_at_unix)
+            rows_today, replaced = write_fact(today_facts, data_dir, today_date)
+            print(
+                f"  [{region}] {FACT_BASENAME}: {rows_today:>5} rows for today "
+                f"(replaced {replaced} same-day rows)"
+            )
+            success_regions.append(region)
+        except Exception as e:
+            failed_regions.append(region)
+            print(f"  [{region}] ERROR: {e}", file=sys.stderr)
         if idx < len(regions):
             time.sleep(INTER_REGION_SLEEP_S)
 
-    if total_catalog_rows == 0 or not dim_frames or not fact_frames:
+    if not success_regions:
         print(
-            "ERROR: 0 catalog rows across configured regions; aborting before writing anything.",
+            "ERROR: all configured regions failed; no writes were completed.",
             file=sys.stderr,
         )
         return 1
 
     print("Skipping SubList enrichment (priceMin/priceMax/lastSoldTime remain null).")
-
     print()
-    print("Writing DIM ...")
-    dim_df = pd.concat(dim_frames, ignore_index=True)
-    dim_df = dim_df.sort_values(["region", "id"]).reset_index(drop=True)
-    _, dim_total, dim_added = upsert_dim(dim_df, data_dir, refresh=args.refresh_dim)
-    refresh_note = " (refreshed)" if args.refresh_dim else ""
-    print(f"  {DIM_BASENAME}: {dim_total} total (+{dim_added} new this run){refresh_note}")
-
-    print()
-    print("Writing FACT ...")
-    today_facts = pd.concat(fact_frames, ignore_index=True)
-    rows_today, replaced = write_fact(today_facts, data_dir, today_date)
     print(
-        f"  {FACT_BASENAME}: {rows_today:>5} rows for today "
-        f"(replaced {replaced} same-day rows)"
+        f"Region summary: succeeded={success_regions} failed={failed_regions} "
+        f"(rows fetched={total_catalog_rows})"
     )
 
     if r2_client is not None:
