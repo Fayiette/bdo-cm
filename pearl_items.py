@@ -14,6 +14,9 @@ from a region's market via API_BASE, then writes a star-schema snapshot:
 FACT files are unique on (region, id, UTC date). Re-runs the same UTC day replace
 that day's existing rows. The trailing `how_many_today` column is recomputed every
 run as max(0, totalTrades_today - totalTrades_strict_yesterday).
+
+This scraper intentionally does not call GetWorldMarketSubList; FACT writes
+priceMin/priceMax/lastSoldTime as null to keep runs fast and stable.
 """
 
 from __future__ import annotations
@@ -54,10 +57,8 @@ SUB_TO_CATEGORY: dict[int, str] = {
     8: "pet",
 }
 
-# Subcategories excluded from the default scrape because their SubList
-# enrichment requests fail consistently (Imperva-blocked 500s). They remain
-# valid in SUB_TO_CATEGORY so they can still be re-enabled explicitly via
-# `--include-subs`.
+# Subcategories excluded from default scrape. They remain valid in
+# SUB_TO_CATEGORY so they can still be re-enabled explicitly via --include-subs.
 DEFAULT_EXCLUDED_SUBS: frozenset[int] = frozenset({3, 4})
 
 CATEGORY_TO_FILE: dict[str, str] = {
@@ -99,6 +100,7 @@ def r2_object_key(prefix: str, filename: str) -> str:
     if not prefix:
         return filename
     return f"{prefix}/{filename}"
+
 
 def require_r2_env() -> dict[str, str]:
     """Return R2 config (credentials + normalized object prefix), or raise SystemExit."""
@@ -248,17 +250,26 @@ def fetch_pearl_items(
 def fetch_sublist_chunk(
     session: requests.Session, api_base: str, region: str, lang: str, ids: list[int]
 ) -> list[dict]:
-    """Single SubList call. Raises on failure; caller handles fallback."""
+    """Single SubList call. Raises on failure; caller handles fallback.
+
+    Flattens list[list[dict]] when the API returns one sub-array per id (sids).
+    """
     url = f"{api_base}/v2/{region}/GetWorldMarketSubList"
     params = {"id": ",".join(str(i) for i in ids), "lang": lang}
     data = get_json(session, url, params=params, quiet=True)
     if isinstance(data, dict):
         return [data]
-    if isinstance(data, list):
-        return data
-    raise RuntimeError(
-        f"Unexpected GetWorldMarketSubList response shape: {type(data)}"
-    )
+    if not isinstance(data, list):
+        raise RuntimeError(
+            f"Unexpected GetWorldMarketSubList response shape: {type(data)}"
+        )
+    out: list[dict] = []
+    for entry in data:
+        if isinstance(entry, dict):
+            out.append(entry)
+        elif isinstance(entry, list):
+            out.extend(x for x in entry if isinstance(x, dict))
+    return out
 
 
 def fetch_sublist_resilient(
@@ -432,7 +443,6 @@ def upsert_dim(
 
 def build_today_facts(
     pearl_items: list[dict],
-    enrichment_by_id: dict[int, dict],
     region: str,
     pulled_at_utc: str,
     pulled_at_unix: int,
@@ -443,7 +453,6 @@ def build_today_facts(
         if sub not in SUB_TO_CATEGORY:
             continue
         item_id = int(item["id"])
-        enrich = enrichment_by_id.get(item_id, {})
         rows.append(
             {
                 "pulled_at_utc": pulled_at_utc,
@@ -453,9 +462,10 @@ def build_today_facts(
                 "currentStock": int(item.get("currentStock", 0) or 0),
                 "basePrice": int(item.get("basePrice", 0) or 0),
                 "totalTrades": int(item.get("totalTrades", 0) or 0),
-                "priceMin": _opt_int(enrich.get("priceMin")),
-                "priceMax": _opt_int(enrich.get("priceMax")),
-                "lastSoldTime": _opt_int(enrich.get("lastSoldTime")),
+                # Intentionally not enriched for pearl scraper speed.
+                "priceMin": None,
+                "priceMax": None,
+                "lastSoldTime": None,
                 "how_many_today": 0,  # placeholder, overwritten in recompute
                 "_subCategory": sub,
             }
@@ -589,14 +599,8 @@ def main() -> int:
         ),
         help=(
             "Comma-separated subCategory ids to include (default: all 1-8 "
-            f"minus {sorted(DEFAULT_EXCLUDED_SUBS)} which fail enrichment "
-            "consistently)."
+            f"minus {sorted(DEFAULT_EXCLUDED_SUBS)})."
         ),
-    )
-    parser.add_argument(
-        "--no-enrich",
-        action="store_true",
-        help="Skip GetWorldMarketSubList enrichment (priceMin/priceMax/lastSoldTime stay null).",
     )
     parser.add_argument(
         "--refresh-dim",
@@ -660,41 +664,7 @@ def main() -> int:
         print("ERROR: 0 items after filtering; aborting before writing anything.", file=sys.stderr)
         return 1
 
-    enrichment_by_id: dict[int, dict] = {}
-    failed_ids: list[int] = []
-    skip_ids: set[int] = set()
-    if not args.no_enrich:
-        ids = [int(i["id"]) for i in pearl]
-        chunks = list(chunked(ids, CHUNK_SIZE))
-        print(f"Fetching SubList enrichment in {len(chunks)} chunks of {CHUNK_SIZE} ...")
-        for idx, chunk in enumerate(chunks, 1):
-            rows = fetch_sublist_resilient(
-                session, api_base, args.region, args.lang, chunk, failed_ids, skip_ids
-            )
-            for r in rows:
-                try:
-                    enrichment_by_id[int(r["id"])] = r
-                except (KeyError, TypeError, ValueError):
-                    continue
-            if idx % 10 == 0 or idx == len(chunks):
-                print(f"  ...chunk {idx}/{len(chunks)} done", flush=True)
-            if idx < len(chunks):
-                time.sleep(INTER_CHUNK_SLEEP_S)
-        enriched_count = sum(1 for i in ids if i in enrichment_by_id)
-        print(f"  enriched {enriched_count}/{len(ids)} items")
-        if skip_ids:
-            print(
-                f"  note: {len(skip_ids)} ids skipped after batch failure "
-                f"({sorted(skip_ids)})"
-            )
-        if failed_ids:
-            print(
-                f"  note: {len(failed_ids)} ids could not be enriched "
-                f"(left as null priceMin/priceMax/lastSoldTime)"
-            )
-    else:
-        print("Skipping enrichment (--no-enrich).")
-        enriched_count = 0
+    print("Skipping SubList enrichment (priceMin/priceMax/lastSoldTime remain null).")
 
     print()
     print("Writing DIM ...")
@@ -706,7 +676,7 @@ def main() -> int:
     print()
     print("Writing FACTs ...")
     today_facts = build_today_facts(
-        pearl, enrichment_by_id, args.region, pulled_at_utc, pulled_at_unix
+        pearl, args.region, pulled_at_utc, pulled_at_unix
     )
     today_facts["category"] = today_facts["_subCategory"].map(SUB_TO_CATEGORY)
 
@@ -729,12 +699,6 @@ def main() -> int:
             f"  {fname.ljust(name_w)} : {rows_today:>5} rows for today "
             f"(replaced {replaced} same-day rows)"
         )
-
-    print()
-    print(
-        f"Enriched (priceMin/priceMax/lastSoldTime): "
-        f"{enriched_count} / {len(pearl)} items"
-    )
 
     if r2_client is not None:
         r2_post_run_upload(
