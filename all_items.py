@@ -478,14 +478,27 @@ def write_fact(
 
     today_rows = today_rows[FACT_COLUMNS].copy()
     today_rows = coerce_fact_dtypes(today_rows)
-    today_ids = set(today_rows["id"].astype(int).tolist())
+    today_keys = set(
+        zip(
+            today_rows["region"].astype(str),
+            today_rows["id"].astype(int),
+        )
+    )
 
     replaced = 0
     if not existing.empty:
         existing = coerce_fact_dtypes(existing)
         existing_dates = existing["pulled_at_utc"].astype(str).str[:10]
         same_day_mask = existing_dates == today_date
-        same_day_and_in_pull = same_day_mask & existing["id"].astype(int).isin(today_ids)
+        existing_keys = list(
+            zip(
+                existing["region"].astype(str),
+                existing["id"].astype(int),
+            )
+        )
+        same_day_and_in_pull = same_day_mask & pd.Series(
+            [k in today_keys for k in existing_keys], index=existing.index
+        )
         replaced = int(same_day_and_in_pull.sum())
         existing = existing[~same_day_and_in_pull]
         combined = pd.concat([existing, today_rows], ignore_index=True)
