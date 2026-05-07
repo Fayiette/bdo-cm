@@ -1,0 +1,57 @@
+# BDO Patch Notes - scheduled run.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   R2_BUCKET              - e.g. abc
+#   R2_ACCESS_KEY_ID       - from Cloudflare R2 -> Manage R2 API tokens
+#   R2_SECRET_ACCESS_KEY   - same
+#   R2_ENDPOINT            - same
+#   R2_PREFIX              - folder inside the bucket
+#
+# Manual run: Actions tab -> "BDO Patch Notes" -> Run workflow.
+
+name: Scrape BDO Patch Notes
+
+on:
+  schedule:
+    # Runs at 01:00 and 13:00 UTC
+    - cron: "0 1,13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patch-notes
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    environment: prod 
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run scraper with R2 sync
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_PATCHES_PREFIX: ${{ secrets.R2_PATCHES_PREFIX }}
+          API_BASE: ${{ secrets.API_BASE }}
+        run: python patches_items.py --r2-sync
