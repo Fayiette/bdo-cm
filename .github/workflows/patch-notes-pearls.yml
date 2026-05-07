@@ -1,4 +1,4 @@
-# BDO Patch Notes - scheduled run.
+# BDO Patch Notes Pearls - scheduled run.
 #
 # Required repo secrets (Settings -> Secrets and variables -> Actions):
 #   R2_BUCKET              - e.g. abc
@@ -7,9 +7,9 @@
 #   R2_ENDPOINT            - same
 #   R2_PREFIX              - folder inside the bucket
 #
-# Manual run: Actions tab -> "BDO Patch Notes" -> Run workflow.
+# Manual run: Actions tab -> "BDO patch-notes-pearls" -> Run workflow.
 
-name: Scrape BDO Patch Notes
+name: Scrape BDO Patch Notes Pearls
 
 on:
   schedule:
@@ -54,4 +54,4 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_PATCHES_PREFIX: ${{ secrets.R2_PATCHES_PREFIX }}
           API_BASE: ${{ secrets.API_BASE }}
-        run: python patches_items.py --r2-sync
+        run: python patch-notes-pearls.py --r2-sync
