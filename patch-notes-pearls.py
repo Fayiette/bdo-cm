@@ -9,9 +9,15 @@ Incremental runs (default): skip detail fetch for groupContentNo already
 present in the merged JSON; stop walking the board after N consecutive known
 rows (see --incremental-stop-after). Use --full-refresh to re-parse all.
 
+Parser output includes flags (v2+): pet wording, value-pack phrases, BE/NL gamble
+disclaimer; blacklisted utility packs are omitted; gamble items with the BE/NL
+line are floored to at least medium impact. Premium outfit box wording
+(OUTFIT_BOX_PHRASES) floors impact to at least high (v3+).
+
 Output (default): data/pearl_patches_normalized.json
 R2 object key:    {R2_PATCHES_PREFIX}/pearl_patches_normalized.json
 (separate from pearl_items.py which uses R2_PREFIX.)
+In CI, set R2_PATCHES_PREFIX via GitHub Actions secrets only, not committed plaintext.
 """
 
 from __future__ import annotations
@@ -38,7 +44,7 @@ BASE = "https://www.naeu.playblackdesert.com"
 LIST_PATH = "/en-US/News/Notice"
 DETAIL_PATH = "/en-US/News/Notice/Detail"
 
-PARSER_VERSION = 1
+PARSER_VERSION = 3
 JSON_FILENAME = "pearl_patches_normalized.json"
 
 R2_ENV_VARS = ("R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT")
@@ -79,6 +85,57 @@ NON_CM_PHRASES: tuple[str, ...] = (
     "cannot be registered on the central market",
     "cannot be registered on central market",
 )
+
+# Sellable / high-interest Pearl listings (names + footers); not gamble RNG boxes.
+VALUE_PACK_PHRASES: tuple[str, ...] = (
+    "value pack",
+    "blessing of old moon pack",
+    "secret book of old moon",
+    "blessing of kamasylve",
+    "Choose Your 7-Day Box",
+)
+
+# Omit from digest entirely (no stableId / no impact noise).
+BLACKLIST_PACK_TITLES: tuple[str, ...] = (
+    "Fairy Growth Aid Pack",
+    "Choose Your Resplendent Storage",
+    "Mount Skill Change Coupon",
+    "Mount Level Down Ticket",
+    "Pet Skill Change Coupon",
+    "Choose Your Own Training Box",
+    "Naderr's Parchment",
+    "Item Brand Spell Stone",
+)
+
+_PET_WORD_RE = re.compile(r"\bpets?\b", re.I)
+
+_IMPACT_ORDER = ("none", "low", "medium", "high")
+
+
+def is_blacklisted_pack(pack_name: str) -> bool:
+    pn = compact_alnum(pack_name)
+    if not pn:
+        return False
+    for title in BLACKLIST_PACK_TITLES:
+        bt = compact_alnum(title)
+        if bt and bt in pn:
+            return True
+    return False
+
+
+def mentions_pet(pack_name: str, content_lines: list[str], preceding_text: str) -> bool:
+    if _PET_WORD_RE.search(pack_name) or _PET_WORD_RE.search(preceding_text):
+        return True
+    return any(_PET_WORD_RE.search(line) for line in content_lines)
+
+
+def floor_impact(impact: str, minimum: str) -> str:
+    try:
+        ia = _IMPACT_ORDER.index(impact)
+        im = _IMPACT_ORDER.index(minimum)
+    except ValueError:
+        return impact
+    return _IMPACT_ORDER[max(ia, im)]
 
 
 def require_r2_env() -> dict[str, str]:
@@ -183,6 +240,12 @@ def compact_alnum(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", s.lower())
 
 
+# NA Pearl Shop footnote on real-money gamble-style boxes; regulatory marker.
+BELGIUM_NL_UNAVAILABLE_COMPACT = compact_alnum(
+    "This item is unavailable in Belgium and the Netherlands."
+)
+
+
 def text_blob(name: str, lines: list[str]) -> str:
     return compact_alnum(name + " " + " ".join(lines))
 
@@ -205,7 +268,10 @@ def classify_product(
     sales_period: str,
     content_lines: list[str],
     preceding_text: str = "",
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    if is_blacklisted_pack(pack_name):
+        return None
+
     blob = text_blob(preceding_text + " " + pack_name, content_lines)
     non_cm = has_any_phrase(blob, NON_CM_PHRASES)
     has_outfit = has_any_phrase(blob, OUTFIT_BOX_PHRASES)
@@ -214,6 +280,8 @@ def classify_product(
         blob, PEARL_BOX_PHRASES
     )
     pearl_box = has_any_phrase(blob, PEARL_BOX_PHRASES)
+    has_value_pack_phrase = has_any_phrase(blob, VALUE_PACK_PHRASES)
+    be_nl_gamble_disclaimer = BELGIUM_NL_UNAVAILABLE_COMPACT in blob
 
     # Single outfit / cosmetic without CM registration (footers mention non-CM)
     if non_cm and "outfit" in blob and not has_outfit and not pearl_box and not cron_heavy:
@@ -246,6 +314,14 @@ def classify_product(
         impact = "low"
         market_tags = ["indirect_market"]
         reason = "RNG / value box; limited direct outfit supply."
+    elif has_value_pack_phrase:
+        category = "other"
+        impact = "medium"
+        market_tags = ["sellable_value", "pearl_value"]
+        reason = (
+            "Sellable / subscription-style Pearl value item "
+            "(e.g. Value Pack, Old Moon, Kamasylve)."
+        )
     elif "coupon" in pack_name.lower() or "coupon" in blob:
         category = "coupon"
         impact = "low"
@@ -257,11 +333,31 @@ def classify_product(
         market_tags = []
         reason = "General Pearl Shop listing."
 
+    if category == "gamble_box" and be_nl_gamble_disclaimer:
+        old_impact = impact
+        impact = floor_impact(impact, "medium")
+        if impact != old_impact:
+            reason = f"{reason} (BE/NL gamble disclaimer → floor medium.)"
+
+    # "Choose Your Premium Outfit Box" / "Premium Outfit Box" → strong CM outfit supply signal.
+    if has_outfit:
+        old_impact = impact
+        impact = floor_impact(impact, "high")
+        if impact != old_impact:
+            reason = f"{reason} (Premium outfit box wording → floor high.)"
+
+    has_pet_wording = mentions_pet(pack_name, content_lines, preceding_text)
+    if has_pet_wording and "pets" not in market_tags:
+        market_tags = [*market_tags, "pets"]
+
     flags = {
         "nonTradeableOutfit": non_cm,
         "hasOutfitBox": has_outfit,
         "hasCronHeavy": cron_heavy,
         "hasPearlBoxWording": pearl_box,
+        "hasPetWording": has_pet_wording,
+        "hasValuePackWording": has_value_pack_phrase,
+        "hasBelgiumNetherlandsUnavailable": be_nl_gamble_disclaimer,
     }
 
     return {
@@ -376,9 +472,9 @@ def parse_detail(html: str, group_no: int, source_url: str) -> dict[str, Any] | 
             sib = sib.next_sibling
 
         pre = _preceding_disclaimer_text(title_block)
-        items.append(
-            classify_product(group_no, pack_name, period, lines, preceding_text=pre)
-        )
+        row = classify_product(group_no, pack_name, period, lines, preceding_text=pre)
+        if row is not None:
+            items.append(row)
 
     return {
         "groupContentNo": group_no,
