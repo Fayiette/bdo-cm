@@ -9,8 +9,8 @@ Incremental runs (default): skip detail fetch for groupContentNo already
 present in the merged JSON; stop walking the board after N consecutive known
 rows (see --incremental-stop-after). Use --full-refresh to re-parse all.
 
-Output (default): data/patches_normalized.json
-R2 object key:    {R2_PATCHES_PREFIX}/patches_normalized.json
+Output (default): data/pearl_patches_normalized.json
+R2 object key:    {R2_PATCHES_PREFIX}/pearl_patches_normalized.json
 (separate from pearl_items.py which uses R2_PREFIX.)
 """
 
@@ -39,7 +39,7 @@ LIST_PATH = "/en-US/News/Notice"
 DETAIL_PATH = "/en-US/News/Notice/Detail"
 
 PARSER_VERSION = 1
-JSON_FILENAME = "patches_normalized.json"
+JSON_FILENAME = "pearl_patches_normalized.json"
 
 R2_ENV_VARS = ("R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT")
 R2_PATCHES_PREFIX_ENV = "R2_PATCHES_PREFIX"
@@ -426,7 +426,7 @@ def listing_urls(session: requests.Session, limit: int) -> list[tuple[int, str]]
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Ingest NA Pearl Shop HTML posts into patches_normalized.json."
+        description="Ingest NA Pearl Shop HTML posts into pearl_patches_normalized.json."
     )
     ap.add_argument("--data-dir", default="data", help="Output directory (default: data)")
     ap.add_argument(
