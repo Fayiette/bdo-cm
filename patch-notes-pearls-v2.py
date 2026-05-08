@@ -246,7 +246,10 @@ def normalize_item_name(name: str) -> str:
     collapse to the same base name.
     """
     n = name.strip()
-    # Title bracket hint like "[-60%] Foo Pack" → "Foo Pack"
+    # Remove any leading bracketed campaign/tag prefixes, e.g.
+    # "[10 Years] Foo", "[Exciting Spring] Foo", "[Event] Foo" → "Foo".
+    n = re.sub(r"^(?:\s*\[[^\]]+\]\s*)+", "", n, count=1)
+    # Back-compat for explicit percent bracket hint.
     n = TITLE_BRACKET_PCT_RE.sub("", n, count=1)
     # Category/title prefix like "25% off Ship/Horse Gear" → "Ship/Horse Gear"
     n = re.sub(
