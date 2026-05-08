@@ -54,4 +54,6 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_PATCHES_PREFIX: ${{ secrets.R2_PATCHES_PREFIX }}
           API_BASE: ${{ secrets.API_BASE }}
-        run: python patch-notes-pearls.py --r2-sync
+        run: |
+          python patch-notes-pearls.py --r2-sync
+          python patch-notes-pearls-v2.py --r2-sync --max-posts 45
