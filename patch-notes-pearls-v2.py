@@ -784,7 +784,7 @@ def main() -> int:
         description="Pearl Shop price/discount catalog v2 (CSV/Parquet/JSON)."
     )
     ap.add_argument("--data-dir", default="data", help="Output directory")
-    ap.add_argument("--max-posts", type=int, default=4240, help="Max Pearl Shop posts to fetch")
+    ap.add_argument("--max-posts", type=int, default=40, help="Max Pearl Shop posts to fetch")
     ap.add_argument(
         "--r2-sync",
         action="store_true",
