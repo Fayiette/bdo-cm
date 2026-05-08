@@ -581,35 +581,52 @@ def parse_detail_catalog(html: str, group_no: int, source_url: str) -> dict[str,
 
 
 def listing_urls(session: requests.Session, limit: int) -> list[tuple[int, str]]:
+    """
+    Crawl Pearl Shop board pages (`page=N`) and collect unique detail URLs.
+    """
     url = f"{BASE}{LIST_PATH}"
-    params = {"boardType": "5", "countryType": "en-US"}
-    html = get_text(session, url, params=params)
-    soup = BeautifulSoup(html, "html.parser")
-    ul = soup.select_one("ul.thumb_nail_list")
-    if not ul:
-        raise RuntimeError("Could not find thumb_nail_list on Pearl Shop board page.")
-
     seen: set[int] = set()
     out: list[tuple[int, str]] = []
-    for a in ul.select('a[href*="groupContentNo="]'):
-        href = a.get("href") or ""
-        m = re.search(r"groupContentNo=(\d+)", href)
-        if not m:
-            continue
-        gid = int(m.group(1))
-        if gid in seen:
-            continue
-        seen.add(gid)
-        if href.startswith("/"):
-            full = BASE + href
-        elif href.startswith("http"):
-            full = href
-        else:
-            full = BASE + "/" + href.lstrip("/")
-        if "countryType=" not in full:
-            full += ("&" if "?" in full else "?") + "countryType=en-US"
-        out.append((gid, full))
-        if len(out) >= limit:
+
+    # Hard safety ceiling; usually we stop much earlier.
+    max_pages = max(1, (limit // 20) + 12)
+    for page in range(1, max_pages + 1):
+        params = {"boardType": "5", "countryType": "en-US"}
+        if page > 1:
+            params["page"] = str(page)
+
+        html = get_text(session, url, params=params)
+        soup = BeautifulSoup(html, "html.parser")
+        ul = soup.select_one("ul.thumb_nail_list")
+        if not ul:
+            if page == 1:
+                raise RuntimeError("Could not find thumb_nail_list on Pearl Shop board page.")
+            break
+
+        before = len(seen)
+        for a in ul.select('a[href*="groupContentNo="]'):
+            href = a.get("href") or ""
+            m = re.search(r"groupContentNo=(\d+)", href)
+            if not m:
+                continue
+            gid = int(m.group(1))
+            if gid in seen:
+                continue
+            seen.add(gid)
+            if href.startswith("/"):
+                full = BASE + href
+            elif href.startswith("http"):
+                full = href
+            else:
+                full = BASE + "/" + href.lstrip("/")
+            if "countryType=" not in full:
+                full += ("&" if "?" in full else "?") + "countryType=en-US"
+            out.append((gid, full))
+            if len(out) >= limit:
+                return out
+
+        # If a page yields no new IDs, pagination is exhausted.
+        if len(seen) == before:
             break
     return out
 
