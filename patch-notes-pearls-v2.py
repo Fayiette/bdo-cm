@@ -259,6 +259,9 @@ def normalize_item_name(name: str) -> str:
         flags=re.I,
         count=1,
     )
+    # Treat singular quantity suffix as the same base item:
+    # "Foo x1" == "Foo", while x2/x3/... remain distinct bundles.
+    n = re.sub(r"\s+x\s*1\s*$", "", n, flags=re.I)
     return re.sub(r"\s+", " ", n).strip()
 
 
