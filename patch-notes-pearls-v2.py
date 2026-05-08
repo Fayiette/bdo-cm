@@ -190,8 +190,40 @@ def r2_upload(client, bucket: str, local_path: Path, key: str) -> None:
 
 def make_session() -> requests.Session:
     s = requests.Session()
-    s.headers.update({"User-Agent": USER_AGENT, "Accept": "text/html,*/*"})
+    s.headers.update(
+        {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+    )
     return s
+
+
+def board_html_looks_blocked(html: str) -> bool:
+    """Pearl Abyss uses Imperva/Incapsula; blocked responses are tiny shell pages."""
+    if len(html) < 8000 and (
+        "Incapsula" in html
+        or "_Incapsula_" in html
+        or 'id="main-iframe"' in html
+        or "Request unsuccessful" in html
+    ):
+        return True
+    return False
+
+
+def collect_board_post_anchors(soup: BeautifulSoup):
+    """Prefer legacy list container; fall back to notice/detail links if markup changes."""
+    ul = soup.select_one("ul.thumb_nail_list")
+    if ul:
+        return ul.select('a[href*="groupContentNo="]')
+    anchors: list = []
+    for a in soup.select('a[href*="groupContentNo="]'):
+        href = a.get("href") or ""
+        if "/News/" not in href and "Notice" not in href:
+            continue
+        anchors.append(a)
+    return anchors
 
 
 def get_text(
@@ -327,6 +359,52 @@ def merge_fact_rows_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     work = work.sort_values("_completeness", ascending=False)
     work = work.drop_duplicates(["postGroupContentNo", "normalizedName"], keep="first")
     return work.drop(columns=["_completeness"])
+
+
+def enrich_fact_cluster_original_pearls(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Same normalizedName may appear with original+sale on one row and null original on another.
+    Fill missing originalPearls from the cluster max MSRP so discount can be computed from prices.
+    """
+    if df.empty or "normalizedName" not in df.columns:
+        return df
+    out = df.copy()
+    if "originalPearls" not in out.columns or "salePearls" not in out.columns:
+        return out
+
+    orig_num = pd.to_numeric(out["originalPearls"], errors="coerce")
+    sale_num = pd.to_numeric(out["salePearls"], errors="coerce")
+    cluster_max_o = orig_num.groupby(out["normalizedName"]).transform("max")
+
+    miss_orig = orig_num.isna()
+    has_sale = sale_num.notna()
+    has_cluster_o = cluster_max_o.notna()
+    fill_mask = miss_orig & has_sale & has_cluster_o
+
+    if not fill_mask.any():
+        return out
+
+    out.loc[fill_mask, "originalPearls"] = cluster_max_o.loc[fill_mask]
+
+    o2 = pd.to_numeric(out.loc[fill_mask, "originalPearls"], errors="coerce")
+    s2 = pd.to_numeric(out.loc[fill_mask, "salePearls"], errors="coerce")
+    pct = np.where((o2 > 0) & s2.notna(), np.round((o2 - s2) / o2 * 100.0, 2), np.nan)
+    out.loc[fill_mask, "discountPercent"] = pct
+
+    if "discountSource" in out.columns:
+        disc_ok = pd.to_numeric(out["discountPercent"], errors="coerce").notna()
+        out.loc[fill_mask & disc_ok, "discountSource"] = "computed_from_prices"
+
+    tag = "cluster_original_fill"
+    if "notes" in out.columns:
+        for idx in out.index[fill_mask]:
+            prev = out.at[idx, "notes"]
+            if pd.isna(prev) or str(prev).strip() in ("", "nan"):
+                out.at[idx, "notes"] = tag
+            elif tag not in str(prev):
+                out.at[idx, "notes"] = f"{prev}; {tag}"
+
+    return out
 
 
 def merge_dim_duplicates(df: pd.DataFrame) -> pd.DataFrame:
@@ -574,6 +652,7 @@ def parse_detail_catalog(html: str, group_no: int, source_url: str) -> dict[str,
     events.extend(parse_shop_item_list_events(area, group_no))
 
     merged_df = merge_fact_rows_duplicates(pd.DataFrame(events)) if events else pd.DataFrame()
+    merged_df = enrich_fact_cluster_original_pearls(merged_df)
     events_out = merged_df.to_dict("records") if not merged_df.empty else []
 
     return {
@@ -599,15 +678,26 @@ def listing_urls(session: requests.Session, limit: int) -> list[tuple[int, str]]
             params["page"] = str(page)
 
         html = get_text(session, url, params=params)
+        if board_html_looks_blocked(html):
+            raise RuntimeError(
+                "Pearl Shop board HTML looks like a bot-protection page (e.g. Incapsula), "
+                "not the real notice list — no ul.thumb_nail_list. "
+                "Try again from a residential IP, use browser cookies in the session, "
+                "or run locally after passing the challenge once."
+            )
         soup = BeautifulSoup(html, "html.parser")
-        ul = soup.select_one("ul.thumb_nail_list")
-        if not ul:
+        link_anchors = collect_board_post_anchors(soup)
+        if not link_anchors:
             if page == 1:
-                raise RuntimeError("Could not find thumb_nail_list on Pearl Shop board page.")
+                raise RuntimeError(
+                    "Could not find Pearl Shop post links on the board page "
+                    "(no ul.thumb_nail_list and no a[href*=groupContentNo] in /News/). "
+                    "The site markup may have changed, or the response was incomplete."
+                )
             break
 
         before = len(seen)
-        for a in ul.select('a[href*="groupContentNo="]'):
+        for a in link_anchors:
             href = a.get("href") or ""
             m = re.search(r"groupContentNo=(\d+)", href)
             if not m:
@@ -694,7 +784,7 @@ def main() -> int:
         description="Pearl Shop price/discount catalog v2 (CSV/Parquet/JSON)."
     )
     ap.add_argument("--data-dir", default="data", help="Output directory")
-    ap.add_argument("--max-posts", type=int, default=40, help="Max Pearl Shop posts to fetch")
+    ap.add_argument("--max-posts", type=int, default=4240, help="Max Pearl Shop posts to fetch")
     ap.add_argument(
         "--r2-sync",
         action="store_true",
@@ -812,6 +902,7 @@ def main() -> int:
 
     all_facts = existing_facts + new_facts
     df_fact = merge_fact_rows_duplicates(pd.DataFrame(all_facts)) if all_facts else pd.DataFrame()
+    df_fact = enrich_fact_cluster_original_pearls(df_fact)
 
     all_dim_rows = existing_dims + new_dims
     df_dim = merge_dim_duplicates(pd.DataFrame(all_dim_rows)) if all_dim_rows else pd.DataFrame()
