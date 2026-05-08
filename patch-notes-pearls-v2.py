@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -40,9 +41,52 @@ from urllib.parse import urlsplit
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
+import numpy as np
 
 USER_AGENT = "bdo-pearl-catalog-v2/1.0 (+https://github.com)"
 RETRY_BACKOFFS = (3.0, 5.0, 13.0)
+
+
+def json_client_safe(obj: Any) -> Any:
+    """RFC 8259 friendly for browser JSON.parse: NaN/Inf → null, numpy/pandas scalars → native."""
+    if isinstance(obj, dict):
+        return {k: json_client_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [json_client_safe(v) for v in obj]
+    if obj is None or isinstance(obj, (str, bool)):
+        return obj
+    if isinstance(obj, int) and not isinstance(obj, bool):
+        return int(obj)
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        x = float(obj)
+        if math.isnan(x) or math.isinf(x):
+            return None
+        return x
+    if isinstance(obj, np.ndarray):
+        return json_client_safe(obj.tolist())
+    try:
+        if obj is pd.NA:
+            return None
+    except (AttributeError, TypeError):
+        pass
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(obj, "item") and callable(getattr(obj, "item", None)):
+        try:
+            return json_client_safe(obj.item())
+        except Exception:
+            pass
+    raise TypeError(f"Not JSON-serializable for catalog: {type(obj)!r}")
+
 
 BASE = "https://www.naeu.playblackdesert.com"
 LIST_PATH = "/en-US/News/Notice"
@@ -754,8 +798,9 @@ def main() -> int:
         "dimPostCount": int(len(df_dim)),
         "bestRowCount": int(len(best_df)),
     }
+    safe_doc = json_client_safe(catalog_doc)
     paths["catalog_json"].write_text(
-        json.dumps(catalog_doc, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(safe_doc, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
         encoding="utf-8",
     )
 
