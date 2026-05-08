@@ -53,6 +53,7 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_PATCHES_PREFIX: ${{ secrets.R2_PATCHES_PREFIX }}
+          R2_PEARL_CATALOG_PREFIX: ${{ secrets.R2_PEARL_CATALOG_PREFIX }}
           API_BASE: ${{ secrets.API_BASE }}
         run: |
           python patch-notes-pearls.py --r2-sync
