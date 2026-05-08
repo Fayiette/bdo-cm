@@ -249,7 +249,13 @@ def normalize_item_name(name: str) -> str:
     # Title bracket hint like "[-60%] Foo Pack" → "Foo Pack"
     n = TITLE_BRACKET_PCT_RE.sub("", n, count=1)
     # Category/title prefix like "25% off Ship/Horse Gear" → "Ship/Horse Gear"
-    n = re.sub(r"^\s*-?\s*\d+\s*%\s*off\s+", "", n, flags=re.I, count=1)
+    n = re.sub(
+        r"^\s*-?\s*\d+(?:\.\d+)?\s*%\s*off\s+",
+        "",
+        n,
+        flags=re.I,
+        count=1,
+    )
     return re.sub(r"\s+", " ", n).strip()
 
 
