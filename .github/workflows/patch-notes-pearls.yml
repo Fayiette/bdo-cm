@@ -57,4 +57,4 @@ jobs:
           API_BASE: ${{ secrets.API_BASE }}
         run: |
           python patch-notes-pearls.py --r2-sync
-          python patch-notes-pearls-v2.py --r2-sync --max-posts 45
+          python patch-notes-pearls-v2.py --r2-sync --max-posts 5045
